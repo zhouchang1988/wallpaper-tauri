@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <!-- 背景：夜空渐变 -->
+    <linearGradient id="bg" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0" stop-color="#12132e"/>
+      <stop offset="0.55" stop-color="#252452"/>
+      <stop offset="1" stop-color="#3d2a63"/>
+    </linearGradient>
+    <!-- 极光缎带渐变 -->
+    <linearGradient id="aurora" x1="0" y1="0" x2="1" y2="0.4">
+      <stop offset="0" stop-color="#2de0c0"/>
+      <stop offset="0.5" stop-color="#4aa8ff"/>
+      <stop offset="1" stop-color="#b06bff"/>
+    </linearGradient>
+    <linearGradient id="aurora2" x1="0" y1="0" x2="1" y2="0.3">
+      <stop offset="0" stop-color="#2de0c0" stop-opacity="0"/>
+      <stop offset="0.55" stop-color="#5f7bff" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#c86bff" stop-opacity="0.6"/>
+    </linearGradient>
+    <!-- 月亮 -->
+    <radialGradient id="moon" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#fff8e7"/>
+      <stop offset="0.7" stop-color="#ffe9b8"/>
+      <stop offset="1" stop-color="#f5c86e"/>
+    </radialGradient>
+    <radialGradient id="moonGlow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffe9b8" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ffe9b8" stop-opacity="0"/>
+    </radialGradient>
+    <!-- 山体 -->
+    <linearGradient id="m1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2c2a55"/>
+      <stop offset="1" stop-color="#191831"/>
+    </linearGradient>
+    <linearGradient id="m2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1c1b3c"/>
+      <stop offset="1" stop-color="#0e0d20"/>
+    </linearGradient>
+    <!-- 顶部高光 -->
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.14"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="iconClip">
+      <rect x="100" y="100" width="824" height="824" rx="186"/>
+    </clipPath>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+
+  <!-- macOS 风格圆角底板 -->
+  <g clip-path="url(#iconClip)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#bg)"/>
+
+    <!-- 星星 -->
+    <g fill="#ffffff">
+      <circle cx="240" cy="250" r="4" opacity="0.9"/>
+      <circle cx="360" cy="190" r="3" opacity="0.6"/>
+      <circle cx="470" cy="300" r="2.6" opacity="0.5"/>
+      <circle cx="180" cy="420" r="3" opacity="0.55"/>
+      <circle cx="560" cy="180" r="2.4" opacity="0.5"/>
+      <circle cx="300" cy="360" r="2" opacity="0.4"/>
+      <circle cx="820" cy="220" r="2.6" opacity="0.5"/>
+      <circle cx="700" cy="470" r="2.2" opacity="0.45"/>
+    </g>
+
+    <!-- 月亮与光晕 -->
+    <circle cx="672" cy="330" r="150" fill="url(#moonGlow)"/>
+    <circle cx="672" cy="330" r="86" fill="url(#moon)"/>
+
+    <!-- 极光缎带（动态壁纸的“动”） -->
+    <path d="M 60 520 C 240 380, 420 560, 620 430 C 760 340, 900 420, 1000 330
+             L 1000 470 C 880 560, 740 480, 600 570 C 420 690, 230 520, 60 660 Z"
+          fill="url(#aurora)" opacity="0.85" filter="url(#soft)"/>
+    <path d="M 60 520 C 240 380, 420 560, 620 430 C 760 340, 900 420, 1000 330
+             L 1000 430 C 890 510, 750 440, 610 525 C 430 635, 235 480, 60 610 Z"
+          fill="url(#aurora2)" opacity="0.8"/>
+
+    <!-- 远山 -->
+    <path d="M 60 700 L 240 540 L 360 650 L 520 500 L 700 660 L 830 560 L 1000 700 L 1000 924 L 60 924 Z"
+          fill="url(#m1)" opacity="0.95"/>
+    <!-- 近山 -->
+    <path d="M 60 800 L 220 660 L 380 780 L 560 620 L 760 790 L 900 690 L 1000 780 L 1000 924 L 60 924 Z"
+          fill="url(#m2)"/>
+
+    <!-- 顶部高光 -->
+    <rect x="100" y="100" width="824" height="412" fill="url(#sheen)"/>
+  </g>
+
+  <!-- 边缘描边 -->
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="none"
+        stroke="#000000" stroke-opacity="0.25" stroke-width="2"/>
+</svg>

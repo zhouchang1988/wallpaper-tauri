@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Rust / Tauri（src-tauri/.gitignore 另有一份）
+src-tauri/target/
+src-tauri/gen/schemas
+
+# 构建产物
+dist/
+build/
+
+# 编辑器
+.idea/
+.vscode/*
+!.vscode/extensions.json

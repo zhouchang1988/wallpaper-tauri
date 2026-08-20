@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>极光山川壁纸</title>
+<!--
+  极光山川动态壁纸 —— 原创页面（assets/ 三款素材已全部壁纸化，故新增自研场景）。
+  遵循项目壁纸约定：
+  1. 无任何文字与 UI，只保留纯视觉内容；
+  2. 无交互，相机固定 45° 俯视角匀速圆周巡航（相机高度 = 水平半径）；
+  3. 复用 src/vendor/three/ 运行时，不重复打包 Three.js。
+-->
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #060b1a; }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+  #vignette {
+    position: fixed; inset: 0; z-index: 5; pointer-events: none;
+    background: radial-gradient(ellipse at center, transparent 55%, rgba(2,4,12,.6) 100%);
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="vignette"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "../../vendor/three/three.module.js",
+    "three/addons/": "../../vendor/three/addons/"
+  }
+}
+</script>
+<script type="module" src="./main.js"></script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>wallpaper-tauri</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+  #frame { display: block; width: 100%; height: 100%; border: 0; }
+</style>
+</head>
+<body>
+<iframe id="frame"></iframe>
+
+<script type="module">
+  // 壁纸加载器：向 Rust 查询当前壁纸，并监听托盘菜单的切换事件。
+  // 每个壁纸是 src/wallpapers/<id>/ 下的独立页面，通过 iframe 全屏加载。
+  const { core, event } = window.__TAURI__;
+  const frame = document.getElementById('frame');
+
+  function loadWallpaper(id) {
+    frame.src = `./wallpapers/${id}/index.html`;
+  }
+
+  loadWallpaper(await core.invoke('current_wallpaper'));
+  await event.listen('wallpaper-changed', (e) => loadWallpaper(e.payload));
+</script>
+</body>
+</html>
