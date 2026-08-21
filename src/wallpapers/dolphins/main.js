@@ -1,45 +1,105 @@
 import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+// 目标观感：3Planesoft Dolphins 3D Lite
+// 热带青绿海水、砂质海底焦散、体积阳光、少量海豚近镜平视（舷窗视角）
+
+const FLOOR_Y = -8.2;
+const SURFACE_Y = 16;
+
+function mulberry32(seed) {
+  let a = seed | 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const rand = mulberry32(0xd01f1);
+
+function hash(x, y) {
+  const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+  return s - Math.floor(s);
+}
+function noise2(x, y) {
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const xf = x - xi, yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf);
+  const v = yf * yf * (3 - 2 * yf);
+  const a = hash(xi, yi), b = hash(xi + 1, yi);
+  const c = hash(xi, yi + 1), d = hash(xi + 1, yi + 1);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+function fbm(x, y) {
+  let h = 0, amp = 0.55, f = 1;
+  for (let i = 0; i < 5; i++) {
+    h += noise2(x * f, y * f) * amp;
+    f *= 2.05;
+    amp *= 0.5;
+  }
+  return h;
+}
 
 // ---------- 渲染器 / 场景 ----------
 const app = document.getElementById('app');
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.12;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 app.appendChild(renderer.domElement);
 
+const WATER = 0x0e6a86;
 const scene = new THREE.Scene();
-const WATER = 0x0b3d63;
 scene.background = new THREE.Color(WATER);
-scene.fog = new THREE.FogExp2(WATER, 0.026);
+scene.fog = new THREE.FogExp2(WATER, 0.018);
 
-const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 240);
+const camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, 0.1, 280);
 
 // ---------- 灯光 ----------
-scene.add(new THREE.HemisphereLight(0xa8d8f0, 0x06283d, 1.3));
-const sun = new THREE.DirectionalLight(0xe8f4ff, 2.0);
-sun.position.set(8, 30, 5);
+scene.add(new THREE.HemisphereLight(0x9fe4ff, 0x0a3a4a, 1.15));
+
+const sun = new THREE.DirectionalLight(0xfff3d6, 2.35);
+sun.position.set(14, 32, 9);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.camera.near = 4;
+sun.shadow.camera.far = 90;
+sun.shadow.camera.left = -28;
+sun.shadow.camera.right = 28;
+sun.shadow.camera.top = 28;
+sun.shadow.camera.bottom = -28;
+sun.shadow.bias = -0.0012;
 scene.add(sun);
 
-// ---------- 海底 ----------
-const floor = new THREE.Mesh(
-  new THREE.CircleGeometry(90, 48),
-  new THREE.MeshStandardMaterial({ color: 0x11486a, roughness: 1 })
-);
-floor.rotation.x = -Math.PI / 2;
-floor.position.y = -7;
-scene.add(floor);
+const fill = new THREE.DirectionalLight(0x5ec8e8, 0.45);
+fill.position.set(-18, 6, -10);
+scene.add(fill);
 
-// 背景渐变球：上方透光亮蓝、下方深海暗蓝（平视视角的天空/深渊）
-const skyGeo = new THREE.SphereGeometry(120, 24, 16);
+// 焦散闪烁补光：让海豚皮肤随水纹亮暗
+const causticFill = new THREE.PointLight(0xb8f0ff, 0.7, 40, 1.4);
+causticFill.position.set(0, 6, 0);
+scene.add(causticFill);
+
+// ---------- 背景穹顶：上亮下暗的海水体积感 ----------
+const skyGeo = new THREE.SphereGeometry(140, 32, 20);
 {
   const sp = skyGeo.attributes.position;
   const sc = new Float32Array(sp.count * 3);
-  const top = new THREE.Color(0x2e86b8);
-  const bottom = new THREE.Color(0x052238);
+  const top = new THREE.Color(0x6ed4f2);
+  const mid = new THREE.Color(0x1686a8);
+  const bottom = new THREE.Color(0x043044);
   const c = new THREE.Color();
   for (let i = 0; i < sp.count; i++) {
-    const k = THREE.MathUtils.smoothstep(sp.getY(i), -60, 80);
-    c.lerpColors(bottom, top, k);
+    const y = sp.getY(i);
+    if (y > 0) c.lerpColors(mid, top, THREE.MathUtils.smoothstep(y, 0, 90));
+    else c.lerpColors(mid, bottom, THREE.MathUtils.smoothstep(-y, 0, 70));
     sc[i * 3] = c.r;
     sc[i * 3 + 1] = c.g;
     sc[i * 3 + 2] = c.b;
@@ -47,35 +107,174 @@ const skyGeo = new THREE.SphereGeometry(120, 24, 16);
   skyGeo.setAttribute('color', new THREE.BufferAttribute(sc, 3));
 }
 scene.add(new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({
-  vertexColors: true, side: THREE.BackSide, fog: false,
+  vertexColors: true, side: THREE.BackSide, fog: false, toneMapped: false,
 })));
 
-// 几块礁石
-const rockMat = new THREE.MeshStandardMaterial({ color: 0x0d3550, roughness: 1 });
-for (let i = 0; i < 7; i++) {
-  const rock = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1), rockMat);
-  const a = Math.random() * Math.PI * 2;
-  const r = 8 + Math.random() * 22;
-  rock.position.set(Math.cos(a) * r, -7 + Math.random() * 0.4, Math.sin(a) * r);
-  rock.scale.set(1 + Math.random() * 2.5, 0.6 + Math.random() * 1.2, 1 + Math.random() * 2.5);
-  rock.rotation.set(Math.random(), Math.random() * Math.PI, Math.random());
+// ---------- 砂质海底（高度噪声 + 顶点着色） ----------
+const FLOOR_SIZE = 92;
+const floorGeo = new THREE.PlaneGeometry(FLOOR_SIZE, FLOOR_SIZE, 96, 96);
+floorGeo.rotateX(-Math.PI / 2);
+{
+  const pos = floorGeo.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  const sand = new THREE.Color(0xc4b089);
+  const wet = new THREE.Color(0x6e8a6a);
+  const rock = new THREE.Color(0x4a5e52);
+  const c = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i);
+    const n = fbm(x * 0.07 + 4, z * 0.07 + 2);
+    const ridge = Math.abs(noise2(x * 0.03, z * 0.03) - 0.5) * 2;
+    pos.setY(i, n * 2.4 + ridge * 0.8);
+    const k = THREE.MathUtils.clamp(n * 1.1 + ridge * 0.35, 0, 1);
+    c.copy(wet).lerp(sand, k * 0.85).lerp(rock, ridge * 0.35);
+    colors[i * 3] = c.r;
+    colors[i * 3 + 1] = c.g;
+    colors[i * 3 + 2] = c.b;
+  }
+  floorGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  floorGeo.computeVertexNormals();
+}
+// 焦散时间 uniform（海底材质与动画循环共享）
+const causticUniforms = { uTime: { value: 0 } };
+
+// 海底焦散：注入海底材质，光网贴合起伏沙面（独立平面会被噪声地形埋住，已废弃）
+const CAUSTIC_GLSL = /* glsl */`
+  float caustic(vec2 p, float t) {
+    float c = 0.0;
+    c += sin(p.x * 3.2 + t * 0.85) * sin(p.y * 2.7 - t * 0.62);
+    c += 0.55 * sin((p.x + p.y) * 2.4 - t * 1.05);
+    c += 0.4 * sin(length(p) * 3.6 - t * 0.7);
+    return pow(max(c * 0.52 + 0.50, 0.0), 3.15);
+  }
+`;
+const floorMat = new THREE.MeshStandardMaterial({
+  vertexColors: true, roughness: 0.95, metalness: 0.02,
+});
+floorMat.customProgramCacheKey = () => 'dolphin-seafloor-caustics-v2';
+floorMat.onBeforeCompile = (shader) => {
+  shader.uniforms.uTime = causticUniforms.uTime;
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vFloorWorld;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFloorWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', `#include <common>
+uniform float uTime;
+varying vec3 vFloorWorld;
+${CAUSTIC_GLSL}`)
+    .replace('#include <opaque_fragment>', `#include <opaque_fragment>
+  { // 焦散网：大尺度光斑（约数米），贴合 Dolphins Lite 砂底，而非细密噪点
+    vec2 cp = vFloorWorld.xz * 0.09;
+    float c = caustic(cp, uTime) + 0.55 * caustic(cp * 1.6 + 4.0, -uTime * 0.8);
+    gl_FragColor.rgb += vec3(0.62, 0.94, 1.0) * c * 0.62;
+  }`);
+};
+const floor = new THREE.Mesh(floorGeo, floorMat);
+floor.position.y = FLOOR_Y;
+floor.receiveShadow = true;
+scene.add(floor);
+
+// ---------- 水面（从水下仰望） ----------
+const surfaceMat = new THREE.ShaderMaterial({
+  uniforms: {
+    uTime: { value: 0 },
+    uCamPos: { value: new THREE.Vector3() },
+  },
+  vertexShader: /* glsl */`
+    varying vec3 vWorld;
+    void main() {
+      vec4 w = modelMatrix * vec4(position, 1.0);
+      vWorld = w.xyz;
+      gl_Position = projectionMatrix * viewMatrix * w;
+    }
+  `,
+  fragmentShader: /* glsl */`
+    uniform float uTime;
+    uniform vec3 uCamPos;
+    varying vec3 vWorld;
+    void main() {
+      vec3 viewDir = normalize(uCamPos - vWorld);
+      float up = smoothstep(0.05, 0.95, viewDir.y);
+      vec3 deep = vec3(0.04, 0.22, 0.32);
+      vec3 sky = vec3(0.55, 0.86, 0.96);
+      vec3 col = mix(deep, sky, up);
+      float sun = pow(max(dot(viewDir, normalize(vec3(0.18, 1.0, 0.12))), 0.0), 42.0);
+      col += vec3(1.0, 0.96, 0.82) * sun * 1.6;
+      float sh = sin(vWorld.x * 0.55 + uTime * 1.1) * sin(vWorld.z * 0.48 - uTime * 0.9);
+      col += vec3(0.12, 0.18, 0.16) * sh * up;
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `,
+  side: THREE.DoubleSide,
+  fog: false,
+  toneMapped: false,
+});
+const surface = new THREE.Mesh(new THREE.CircleGeometry(90, 48), surfaceMat);
+surface.rotation.x = -Math.PI / 2;
+surface.position.y = SURFACE_Y;
+scene.add(surface);
+
+// ---------- 礁石 ----------
+const rockPalette = [0x3d5348, 0x4a5c50, 0x2f4038, 0x5a6a58];
+for (let i = 0; i < 14; i++) {
+  const rock = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(1, 1),
+    new THREE.MeshStandardMaterial({
+      color: rockPalette[i % rockPalette.length],
+      roughness: 0.92,
+      flatShading: true,
+    })
+  );
+  const a = rand() * Math.PI * 2;
+  const r = 6 + rand() * 28;
+  rock.position.set(Math.cos(a) * r, FLOOR_Y + rand() * 0.5, Math.sin(a) * r);
+  rock.scale.set(1.2 + rand() * 3.2, 0.7 + rand() * 1.8, 1.2 + rand() * 3.2);
+  rock.rotation.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
+  rock.castShadow = true;
+  rock.receiveShadow = true;
   scene.add(rock);
 }
 
+// ---------- 海草 ----------
+const kelpMat = new THREE.MeshStandardMaterial({
+  color: 0x1d6a52, roughness: 0.85, side: THREE.DoubleSide,
+});
+const kelps = [];
+for (let i = 0; i < 36; i++) {
+  const h = 1.6 + rand() * 3.4;
+  const geo = new THREE.PlaneGeometry(0.18 + rand() * 0.12, h, 1, 7);
+  geo.translate(0, h / 2, 0);
+  const kelp = new THREE.Mesh(geo, kelpMat);
+  const a = rand() * Math.PI * 2;
+  const r = 5 + rand() * 24;
+  kelp.position.set(Math.cos(a) * r, FLOOR_Y, Math.sin(a) * r);
+  kelp.rotation.y = rand() * Math.PI;
+  kelp.castShadow = true;
+  scene.add(kelp);
+  kelps.push({ mesh: kelp, phase: rand() * Math.PI * 2, amp: 0.12 + rand() * 0.18 });
+}
+
 // ---------- 海豚（程序化建模，前进方向 +Z） ----------
-const COLOR_TOP = new THREE.Color(0x4e6d84);   // 背部深灰蓝
-const COLOR_BELLY = new THREE.Color(0xdce9f2); // 腹部浅白
-const finMat = new THREE.MeshStandardMaterial({ color: 0x54748c, roughness: 0.4, metalness: 0.05 });
-const skinMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.35, metalness: 0.05 });
-const eyeMat = new THREE.MeshStandardMaterial({ color: 0x14202c, roughness: 0.3 });
+const COLOR_TOP = new THREE.Color(0x6a7e8c);
+const COLOR_BELLY = new THREE.Color(0xe8f0f4);
+const finMat = new THREE.MeshPhysicalMaterial({
+  color: 0x5c7384, roughness: 0.32, metalness: 0.06,
+  clearcoat: 0.45, clearcoatRoughness: 0.3,
+});
+const skinMat = new THREE.MeshPhysicalMaterial({
+  vertexColors: true, roughness: 0.26, metalness: 0.06,
+  clearcoat: 0.62, clearcoatRoughness: 0.22,
+});
+const eyeMat = new THREE.MeshPhysicalMaterial({
+  color: 0x101820, roughness: 0.15, metalness: 0.2, clearcoat: 0.8,
+});
 const BODY_LEN = 4.2;
 
-// 身体半径包络：t=0 尾端 -> t=1 吻尖，含额隆与吻部 taper
 function bodyRadius(t) {
-  let r = Math.sin(Math.PI * Math.pow(1 - t, 0.65)) * 0.55; // 基础纺锤
-  r = Math.min(r, 0.07 + t * 0.8);                          // 尾柄收窄
-  if (t > 0.86) r *= 1 - ((t - 0.86) / 0.14) * 0.75;        // 吻尖收细
-  r += Math.exp(-Math.pow((t - 0.78) / 0.09, 2)) * 0.06;    // 额隆隆起
+  let r = Math.sin(Math.PI * Math.pow(1 - t, 0.65)) * 0.55;
+  r = Math.min(r, 0.07 + t * 0.8);
+  if (t > 0.86) r *= 1 - ((t - 0.86) / 0.14) * 0.75;
+  r += Math.exp(-Math.pow((t - 0.78) / 0.09, 2)) * 0.06;
   return Math.max(r, 0.012);
 }
 
@@ -87,9 +286,8 @@ function buildBodyGeometry() {
     profile.push(new THREE.Vector2(bodyRadius(t), t * BODY_LEN));
   }
   const geo = new THREE.LatheGeometry(profile, 32);
-  geo.rotateX(Math.PI / 2);           // +Y -> +Z（吻在 +Z）
-  geo.translate(0, 0, -BODY_LEN / 2); // 身体居中
-  // 双色涂装：按高度在背部色与腹部色之间过渡
+  geo.rotateX(Math.PI / 2);
+  geo.translate(0, 0, -BODY_LEN / 2);
   const pos = geo.attributes.position;
   const colors = new Float32Array(pos.count * 3);
   const c = new THREE.Color();
@@ -101,41 +299,38 @@ function buildBodyGeometry() {
     colors[i * 3 + 2] = c.b;
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.computeVertexNormals();
   return geo;
 }
 
-// 曲面挤出的鳍（shape 平面：x 朝后、y 朝上，挤出厚度居中后转到横跨身体的 X 轴）
 function buildFinGeometry(shape, thickness) {
   const geo = new THREE.ExtrudeGeometry(shape, {
     depth: thickness, bevelEnabled: true,
     bevelThickness: 0.02, bevelSize: 0.02, bevelSegments: 2, curveSegments: 16,
   });
   geo.translate(0, 0, -thickness / 2);
-  geo.rotateY(Math.PI / 2); // shape x -> -Z（朝后），厚度 -> +X
+  geo.rotateY(Math.PI / 2);
   return geo;
 }
 
-// 背鳍：前缘隆起、向后下方回落的弯刀形
 function buildDorsalFin() {
   const s = new THREE.Shape();
   s.moveTo(0, 0);
   s.quadraticCurveTo(0.12, 0.6, 0.42, 0.85);
   s.quadraticCurveTo(0.5, 0.45, 0.72, 0.02);
   s.quadraticCurveTo(0.35, -0.04, 0, 0);
-  return new THREE.Mesh(buildFinGeometry(s, 0.09), finMat);
+  return buildFinGeometry(s, 0.09);
 }
 
-// 胸鳍：小巧后掠的水滴形
 function buildPectoralFin() {
   const s = new THREE.Shape();
   s.moveTo(0, 0);
   s.quadraticCurveTo(0.1, 0.28, 0.5, 0.42);
   s.quadraticCurveTo(0.42, 0.12, 0.55, -0.02);
   s.quadraticCurveTo(0.28, -0.08, 0, 0);
-  return new THREE.Mesh(buildFinGeometry(s, 0.06), finMat);
+  return buildFinGeometry(s, 0.06);
 }
 
-// 尾鳍：水平新月形（shape 平面俯视，x 展开、y 后掠，翻转到 XZ 平面）
 function buildTailFluke() {
   const s = new THREE.Shape();
   s.moveTo(0.78, 0.42);
@@ -150,105 +345,134 @@ function buildTailFluke() {
     bevelThickness: 0.02, bevelSize: 0.02, bevelSegments: 2, curveSegments: 16,
   });
   geo.translate(0, 0, -0.03);
-  geo.rotateX(-Math.PI / 2); // shape y -> -Z（后掠），厚度 -> +Y
-  return new THREE.Mesh(geo, finMat);
+  geo.rotateX(-Math.PI / 2);
+  return geo;
+}
+
+const bodyGeo = buildBodyGeometry();
+const dorsalGeo = buildDorsalFin();
+const pectoralGeo = buildPectoralFin();
+const flukeGeo = buildTailFluke();
+const eyeGeo = new THREE.SphereGeometry(0.05, 12, 12);
+
+function enableShadow(root) {
+  root.traverse((obj) => {
+    if (obj.isMesh) {
+      obj.castShadow = true;
+      obj.receiveShadow = true;
+    }
+  });
 }
 
 function buildDolphin(scale = 1) {
   const dolphin = new THREE.Group();
   dolphin.rotation.order = 'YXZ';
 
-  dolphin.add(new THREE.Mesh(buildBodyGeometry(), skinMat));
+  const body = new THREE.Group();
+  body.add(new THREE.Mesh(bodyGeo, skinMat));
 
-  // 背鳍
-  const dorsal = buildDorsalFin();
+  const dorsal = new THREE.Mesh(dorsalGeo, finMat);
   dorsal.scale.setScalar(0.8);
   dorsal.position.set(0, 0.4, 0.35);
-  dolphin.add(dorsal);
+  body.add(dorsal);
 
-  // 胸鳍：向外下方展开
+  const pectorals = [];
   for (const side of [-1, 1]) {
-    const fin = buildPectoralFin();
+    const fin = new THREE.Mesh(pectoralGeo, finMat);
     fin.position.set(side * 0.42, -0.2, 0.85);
     fin.rotation.z = side * -2.3;
     fin.rotation.y = side * 0.3;
-    dolphin.add(fin);
+    body.add(fin);
+    pectorals.push({ mesh: fin, side, z0: side * -2.3 });
   }
 
-  // 眼睛
   for (const side of [-1, 1]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 10), eyeMat);
+    const eye = new THREE.Mesh(eyeGeo, eyeMat);
     eye.position.set(side * 0.44, 0.06, 1.15);
-    dolphin.add(eye);
+    body.add(eye);
   }
 
-  // 尾鳍组（用于摆动动画）
   const tail = new THREE.Group();
   tail.position.set(0, 0, -BODY_LEN / 2);
-  const fluke = buildTailFluke();
+  const fluke = new THREE.Mesh(flukeGeo, finMat);
   fluke.position.set(0, 0, -0.05);
   tail.add(fluke);
-  dolphin.add(tail);
-
+  body.add(tail);
+  dolphin.add(body);
   dolphin.scale.setScalar(scale);
-  return { group: dolphin, tail };
+  enableShadow(dolphin);
+  return { group: dolphin, body, tail, pectorals };
 }
 
-// ---------- 海豚群 ----------
+// Lite 风格：三四只同向巡游，偶尔贴近镜头
 const podConfigs = [
-  { R: 5,   y: 2.0, w: 0.34,  phase: 0.0, s: 1.05 },
-  { R: 5.5, y: 3.4, w: 0.34,  phase: 2.8, s: 0.85 },
-  { R: 8.5, y: 1.0, w: -0.26, phase: 1.4, s: 1.2  },
-  { R: 10,  y: 4.2, w: 0.22,  phase: 4.2, s: 0.95 },
-  { R: 12,  y: 2.8, w: -0.18, phase: 5.3, s: 0.9  },
+  { R: 6.2, y: 1.5, w: 0.27, phase: 0.0, s: 1.08, bob: 0.85 },
+  { R: 7.0, y: 2.6, w: 0.27, phase: 0.72, s: 0.90, bob: 1.05 },
+  { R: 8.4, y: 1.15, w: 0.23, phase: 2.15, s: 1.16, bob: 0.7 },
+  { R: 5.6, y: 3.2, w: 0.29, phase: 3.9, s: 0.84, bob: 1.2 },
 ];
 const pod = podConfigs.map((cfg) => {
   const d = buildDolphin(cfg.s);
   scene.add(d.group);
-  return { ...cfg, ...d };
+  return { ...cfg, ...d, glance: 0 };
 });
 
-// ---------- 气泡 ----------
+// ---------- 气泡 + 浮游颗粒 ----------
 function makeCircleTexture() {
   const c = document.createElement('canvas');
   c.width = c.height = 64;
   const g = c.getContext('2d');
   const grad = g.createRadialGradient(32, 32, 4, 32, 32, 32);
-  grad.addColorStop(0, 'rgba(230,245,255,0.9)');
-  grad.addColorStop(0.6, 'rgba(200,230,255,0.35)');
+  grad.addColorStop(0, 'rgba(230,245,255,0.95)');
+  grad.addColorStop(0.55, 'rgba(200,230,255,0.32)');
   grad.addColorStop(1, 'rgba(200,230,255,0)');
   g.fillStyle = grad;
   g.fillRect(0, 0, 64, 64);
   return new THREE.CanvasTexture(c);
 }
 
-const BUBBLES = 120;
+const BUBBLES = 90;
 const bubblePos = new Float32Array(BUBBLES * 3);
 const bubbleSpeed = new Float32Array(BUBBLES);
 for (let i = 0; i < BUBBLES; i++) {
-  const a = Math.random() * Math.PI * 2;
-  const r = Math.random() * 16;
+  const a = rand() * Math.PI * 2;
+  const r = rand() * 18;
   bubblePos[i * 3] = Math.cos(a) * r;
-  bubblePos[i * 3 + 1] = -6 + Math.random() * 20;
+  bubblePos[i * 3 + 1] = FLOOR_Y + 0.4 + rand() * 18;
   bubblePos[i * 3 + 2] = Math.sin(a) * r;
-  bubbleSpeed[i] = 0.6 + Math.random() * 1.2;
+  bubbleSpeed[i] = 0.45 + rand() * 1.1;
 }
 const bubbleGeo = new THREE.BufferGeometry();
 bubbleGeo.setAttribute('position', new THREE.BufferAttribute(bubblePos, 3));
-const bubbles = new THREE.Points(bubbleGeo, new THREE.PointsMaterial({
-  map: makeCircleTexture(), size: 0.4, transparent: true, opacity: 0.55,
-  depthWrite: false, sizeAttenuation: true,
-}));
-scene.add(bubbles);
+scene.add(new THREE.Points(bubbleGeo, new THREE.PointsMaterial({
+  map: makeCircleTexture(), size: 0.38, transparent: true, opacity: 0.5,
+  depthWrite: false, sizeAttenuation: true, toneMapped: false,
+})));
 
-// ---------- 体积光束 ----------
+const PLANKTON = 260;
+const planktonPos = new Float32Array(PLANKTON * 3);
+for (let i = 0; i < PLANKTON; i++) {
+  const a = rand() * Math.PI * 2;
+  const r = rand() * 22;
+  planktonPos[i * 3] = Math.cos(a) * r;
+  planktonPos[i * 3 + 1] = FLOOR_Y + 0.5 + rand() * 16;
+  planktonPos[i * 3 + 2] = Math.sin(a) * r;
+}
+const planktonGeo = new THREE.BufferGeometry();
+planktonGeo.setAttribute('position', new THREE.BufferAttribute(planktonPos, 3));
+scene.add(new THREE.Points(planktonGeo, new THREE.PointsMaterial({
+  color: 0xd8f4ff, size: 0.06, transparent: true, opacity: 0.55,
+  depthWrite: false, sizeAttenuation: true, toneMapped: false,
+})));
+
+// ---------- 体积阳光 ----------
 function makeRayTexture() {
   const c = document.createElement('canvas');
   c.width = 64; c.height = 256;
   const g = c.getContext('2d');
   const v = g.createLinearGradient(0, 0, 0, 256);
-  v.addColorStop(0, 'rgba(215,240,255,0.85)');
-  v.addColorStop(1, 'rgba(215,240,255,0)');
+  v.addColorStop(0, 'rgba(220,248,255,0.95)');
+  v.addColorStop(1, 'rgba(220,248,255,0)');
   g.fillStyle = v;
   g.fillRect(0, 0, 64, 256);
   g.globalCompositeOperation = 'destination-in';
@@ -262,72 +486,116 @@ function makeRayTexture() {
 }
 const rayTex = makeRayTexture();
 const rays = [];
-for (let i = 0; i < 6; i++) {
+for (let i = 0; i < 9; i++) {
   const ray = new THREE.Mesh(
-    new THREE.PlaneGeometry(2.5 + Math.random() * 2.5, 36),
+    new THREE.PlaneGeometry(2.2 + rand() * 3.2, 42),
     new THREE.MeshBasicMaterial({
-      map: rayTex, transparent: true, opacity: 0.1,
-      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+      map: rayTex, transparent: true, opacity: 0.12,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+      side: THREE.DoubleSide, toneMapped: false, fog: false,
     })
   );
-  const a = Math.random() * Math.PI * 2;
-  const r = 3 + Math.random() * 11;
-  ray.position.set(Math.cos(a) * r, 8, Math.sin(a) * r);
-  ray.rotation.z = 0.18 + Math.random() * 0.15;
-  ray.rotation.y = Math.random() * Math.PI;
-  rays.push({ mesh: ray, base: 0.06 + Math.random() * 0.08, phase: Math.random() * Math.PI * 2 });
+  const a = rand() * Math.PI * 2;
+  const r = 2 + rand() * 12;
+  ray.position.set(Math.cos(a) * r, 7.5, Math.sin(a) * r);
+  ray.rotation.z = 0.12 + rand() * 0.16;
+  ray.rotation.y = rand() * Math.PI;
+  rays.push({ mesh: ray, base: 0.07 + rand() * 0.09, phase: rand() * Math.PI * 2 });
   scene.add(ray);
 }
 
+// ---------- 后期：轻微辉光（阳光/焦散） ----------
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.28, 0.48, 0.82));
+composer.addPass(new OutputPass());
+
 // ---------- 动画 ----------
 const clock = new THREE.Clock();
+const lookTarget = new THREE.Vector3();
+const tmp = new THREE.Vector3();
+const toCam = new THREE.Vector3();
 
 function animate() {
   requestAnimationFrame(animate);
   const t = clock.getElapsedTime();
 
-  // 相机：海里平视——与海豚群同深度缓慢环绕，带轻微浮沉
-  const CR = 13;
-  camera.position.set(
-    Math.cos(t * 0.04) * CR,
-    2.2 + Math.sin(t * 0.1) * 0.5,
-    Math.sin(t * 0.04) * CR
-  );
-  camera.lookAt(0, 2, 0);
+  causticUniforms.uTime.value = t;
+  surfaceMat.uniforms.uTime.value = t;
+  surfaceMat.uniforms.uCamPos.value.copy(camera.position);
+  causticFill.intensity = 0.45 + 0.4 * (0.5 + 0.5 * Math.sin(t * 1.7) * Math.sin(t * 2.3));
+  causticFill.position.set(Math.sin(t * 0.2) * 4, 7, Math.cos(t * 0.17) * 4);
 
-  // 海豚群：变速穿梭 + 大幅起伏 + 高频摆尾
+  // 舷窗平视：略低于海豚群，海底焦散占画面下沿，缓慢环绕；半径略收，近镜更满
+  const CR = 11.2;
+  camera.position.set(
+    Math.cos(t * 0.038) * CR,
+    2.05 + Math.sin(t * 0.09) * 0.55,
+    Math.sin(t * 0.038) * CR
+  );
+  lookTarget.set(
+    Math.sin(t * 0.05) * 1.4,
+    1.7 + Math.sin(t * 0.07) * 0.35,
+    Math.cos(t * 0.04) * 1.2
+  );
+  camera.lookAt(lookTarget);
+
   for (const d of pod) {
-    const surge = Math.sin(t * 0.45 + d.phase * 2) * 0.35;      // 游速起伏
-    const a = d.phase + t * d.w + surge * 0.4;
-    const r = d.R + Math.sin(t * 0.3 + d.phase) * 1.6;          // 半径摆动
+    const surge = Math.sin(t * 0.42 + d.phase * 2) * 0.28;
+    const a = d.phase + t * d.w + surge * 0.35;
+    const r = d.R + Math.sin(t * 0.28 + d.phase) * 1.15;
     const x = Math.cos(a) * r;
     const z = Math.sin(a) * r;
-    const y = d.y + Math.sin(t * 1.1 + d.phase) * 1.1;          // 上下穿梭
+    const y = d.y + Math.sin(t * 0.85 + d.phase) * d.bob;
     d.group.position.set(x, y, z);
-    const yaw = Math.atan2(-Math.sin(a) * d.w, Math.cos(a) * d.w);
-    const swim = Math.sin(t * 6.5 + d.phase * 3);               // 摆动主节拍
-    const pitch = -Math.cos(t * 1.1 + d.phase) * 0.3 + swim * 0.06;
-    const roll = -Math.sign(d.w) * 0.3;
+
+    let yaw = Math.atan2(-Math.sin(a) * d.w, Math.cos(a) * d.w);
+    toCam.copy(camera.position).sub(d.group.position);
+    const dist = toCam.length();
+    // 圆周切向游时，最近处朝向与镜头几乎垂直；近距就转头，不要求正对
+    const wantGlance = dist < 11 ? THREE.MathUtils.smoothstep(11 - dist, 0, 5.5) * 0.72 : 0;
+    d.glance += (wantGlance - d.glance) * 0.08;
+    const glanceYaw = Math.atan2(toCam.x, toCam.z);
+    yaw = THREE.MathUtils.lerp(yaw, glanceYaw, d.glance);
+
+    const swim = Math.sin(t * 6.2 + d.phase * 3);
+    const pitch = -Math.cos(t * 0.85 + d.phase) * 0.22 + swim * 0.05;
+    const roll = -Math.sign(d.w) * 0.22 + Math.sin(t * 0.5 + d.phase) * 0.06;
     d.group.rotation.set(pitch, yaw, roll);
-    d.tail.rotation.x = swim * 0.62;
+    d.body.rotation.x = swim * 0.07;
+    d.tail.rotation.x = swim * 0.58;
+    for (const p of d.pectorals) {
+      p.mesh.rotation.z = p.z0 + Math.sin(t * 3.2 + d.phase + p.side) * 0.18;
+    }
   }
 
-  // 气泡上升
-  const pos = bubbleGeo.attributes.position;
+  const bpos = bubbleGeo.attributes.position;
   for (let i = 0; i < BUBBLES; i++) {
-    let y = pos.getY(i) + bubbleSpeed[i] * 0.016;
-    if (y > 14) y = -6;
-    pos.setY(i, y);
-    pos.setX(i, pos.getX(i) + Math.sin(t * 1.5 + i) * 0.004);
+    let y = bpos.getY(i) + bubbleSpeed[i] * 0.016;
+    if (y > SURFACE_Y - 1.5) y = FLOOR_Y + 0.3;
+    bpos.setY(i, y);
+    bpos.setX(i, bpos.getX(i) + Math.sin(t * 1.4 + i) * 0.004);
   }
-  pos.needsUpdate = true;
+  bpos.needsUpdate = true;
 
-  // 光束呼吸
+  const ppos = planktonGeo.attributes.position;
+  for (let i = 0; i < PLANKTON; i++) {
+    tmp.set(ppos.getX(i), ppos.getY(i), ppos.getZ(i));
+    tmp.x += Math.sin(t * 0.35 + i * 0.17) * 0.003;
+    tmp.y += Math.sin(t * 0.22 + i) * 0.002;
+    if (tmp.y > SURFACE_Y - 2) tmp.y = FLOOR_Y + 0.6;
+    ppos.setXYZ(i, tmp.x, tmp.y, tmp.z);
+  }
+  ppos.needsUpdate = true;
+
   for (const ray of rays) {
-    ray.mesh.material.opacity = ray.base * (0.7 + 0.3 * Math.sin(t * 0.5 + ray.phase));
+    ray.mesh.material.opacity = ray.base * (0.65 + 0.35 * Math.sin(t * 0.45 + ray.phase));
+  }
+  for (const k of kelps) {
+    k.mesh.rotation.z = Math.sin(t * 0.7 + k.phase) * k.amp;
   }
 
-  renderer.render(scene, camera);
+  composer.render();
 }
 animate();
 
@@ -335,4 +603,5 @@ window.addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
 });

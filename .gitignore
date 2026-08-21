@@ -19,3 +19,6 @@ build/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# AI 协作工具
+.omo/
