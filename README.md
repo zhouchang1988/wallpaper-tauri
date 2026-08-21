@@ -21,7 +21,7 @@
 | `storm-ship` | 风暴航船 | Three.js 实时渲染：Gerstner 波浪海面、闪电、泛光后期 |
 | `pipes` | 三维水管 | 原生 WebGL2：经典 Windows 屏保重现，水管基本长满网格后清场重来 |
 | `dolphins` | 海豚群 | Three.js 实时渲染：程序化建模的海豚群在深海光束与气泡中穿梭 |
-| `aurora` | 极光山川 | Three.js 实时渲染：低多边形雪山岛屿、极光帘幕与星月夜 |
+| `cloud-sea` | 云海日出 | Three.js 实时渲染：低多边形群峰刺破黄昏云海，粉金天穹、落日与飞鸟剪影 |
 
 ## 开发
 

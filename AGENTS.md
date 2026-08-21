@@ -31,8 +31,21 @@ saver/
   WallpaperSaverView.m       # 锁屏屏保：ScreenSaverView + WKWebView 渲染同款壁纸
   Info.plist                 # .saver bundle 清单（NSPrincipalClass = WallpaperSaverView）
   build.sh                   # 用 clang 直接编译 .saver 并打包壁纸资源（无需 Xcode 工程）
-assets/                      # 壁纸原型 / 素材（见下方「壁纸来源」声明）
+assets/                      # 壁纸原型页（新增壁纸先于此编写，见下方流程）
 ```
+
+## 新增壁纸的流程
+
+开发顺序固定为「先原型、后壁纸」，两步都不可跳过：
+
+1. **先写原型**：在 `assets/` 下新建 `<id>.html`，单文件自包含（可用 CDN 引入 Three.js），允许保留标题、说明等文字 UI，浏览器直接打开即可预览。
+2. **再落壁纸**：把原型改写为 `src/wallpapers/<id>/` 下的自包含页面（index.html + 资源），要求：
+   - 去除页面中的所有文字（标题、说明、UI 文案等，只保留纯视觉内容）；
+   - 默认以 45 度俯视角自动圆周巡航（相机高度 = 水平半径，绕场景匀速旋转）；
+   - import map 引用 `../../vendor/three/`，不重复打包 Three.js；
+   - 如果用户有其他要求（例如固定视角、水平移动等），以用户的要求为准，上述默认规则相应让位。
+3. 在 `src-tauri/src/lib.rs` 的 `WALLPAPERS` 注册表追加或替换 `("<id>", "显示名")`；托盘「选择壁纸」子菜单会自动出现对应选项，切换通过 `wallpaper-changed` 事件通知前端。
+4. 新增/修改壁纸后重跑 `saver/build.sh`，并更新 `README.md` 的壁纸清单。
 
 ## 锁屏动态壁纸（屏保）
 
@@ -41,20 +54,6 @@ assets/                      # 壁纸原型 / 素材（见下方「壁纸来源�
 - `tauri.conf.json` 把 `saver/build/WallpaperTauri.saver` 作为 bundle 资源打进 .app；托盘「安装锁屏屏保…」将其复制到 `~/Library/Screen Savers/` 并打开系统设置，用户选定该屏保后锁屏即展示动态壁纸。
 - 主应用启动/切换壁纸时把当前 id 写入 `~/Library/Application Support/wallpaper-tauri/current-wallpaper`；屏保读取该文件渲染同款壁纸，读取失败（沙盒）回退注册表第一项。
 - 注意：屏保渲染的壁纸随 `saver/build.sh` 打包进 .saver 资源，**新增/修改壁纸后需重新运行 `saver/build.sh` 并重装屏保**才会生效。
-
-## 新增壁纸的流程
-
-1. 在 `src/wallpapers/<id>/` 下新建目录，提供 `index.html`（自包含页面）。
-2. 在 `src-tauri/src/lib.rs` 的 `WALLPAPERS` 注册表追加 `("<id>", "显示名")`。
-3. 托盘「选择壁纸」子菜单会自动出现新选项；切换通过 `wallpaper-changed` 事件通知前端。
-
-## 壁纸来源声明
-
-壁纸源自 `assets/` 目录中的内容，即 3D 的 Web 页面。如果要求根据 `assets/` 中的某个 HTML 页面新增壁纸，则需要：
-
-- 去除页面中的所有文字（标题、说明、UI 文案等，只保留纯视觉内容）；
-- 默认以 45 度俯视角自动圆周巡航（相机高度 = 水平半径，绕场景匀速旋转）；
-- 如果用户有其他要求（例如固定视角、水平移动等），以用户的要求为准，上述两条默认规则相应让位。
 
 ## 技术要点（改动时注意）
 
