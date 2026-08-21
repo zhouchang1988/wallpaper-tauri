@@ -58,8 +58,8 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 app.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-// 晨雾：略提亮，避免脏暗；与浅玫瑰地平线衔接
-scene.fog = new THREE.FogExp2(0x5c5a72, 0.0024);
+// 线性雾：近处清晰、远处剪影，避免指数雾把远山糊成一片
+scene.fog = new THREE.Fog(0x6a6880, 90, 360);
 
 const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 1200);
 
@@ -94,9 +94,9 @@ const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 12
 // ---------- 太阳方向（略抬高，保证 45° 巡航时上半画幅能看到日盘） ----------
 const SUN_DIR = new THREE.Vector3(0.50, 0.22, -0.76).normalize();
 
-// ---------- 灯光 ----------
-scene.add(new THREE.HemisphereLight(0x9aa4c4, 0x2a2838, 1.05));
-const sunLight = new THREE.DirectionalLight(0xffe0c4, 1.75);
+// ---------- 灯光（日出：强平行光打向阳坡，半球冷补光托住背阴面） ----------
+scene.add(new THREE.HemisphereLight(0xb8c4dc, 0x3e4258, 1.45));
+const sunLight = new THREE.DirectionalLight(0xffe4c8, 2.85);
 sunLight.position.copy(SUN_DIR).multiplyScalar(100);
 scene.add(sunLight);
 
@@ -189,7 +189,7 @@ function ridgedFbm(x, y) {
   return h / sum;
 }
 
-// ---------- 写实群峰：大部分没入云海，只有峰顶刺破 ----------
+// ---------- 写实群峰：高度错落——矮岭沉谷、中峰半掩、高岭露山腰 ----------
 const SIZE = 240, SEG = 200;
 const HEIGHT_SCALE = 40; // 高度图编码上限，供云层相交渐隐采样
 const terrainGeo = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
@@ -201,13 +201,15 @@ const heightPixels = new Uint8Array((SEG + 1) * (SEG + 1));
     const x = pos.getX(i), z = pos.getZ(i);
     const wx = fbm(x * 0.012 + 8, z * 0.012 + 8, 3);
     const wz = fbm(x * 0.012 + 21, z * 0.012 + 21, 3);
-    const ridges = ridgedFbm(x * 0.016 + wx * 1.8, z * 0.016 + wz * 1.8);
-    const base = fbm(x * 0.007 + 3, z * 0.007 + 3, 4);
-    // 水位线：低于阈值的全沉入云下，只留孤峰岛屿
-    let n = ridges * 0.70 + base * 0.30;
-    n = Math.max(0, (n - 0.40) / 0.60);
-    let h = Math.pow(n, 1.45) * 24;
-    if (h > 14) h += (noise2(x * 0.12, z * 0.12) - 0.5) * 0.45;
+    const ridges = ridgedFbm(x * 0.014 + wx * 1.6, z * 0.014 + wz * 1.6);
+    const base = fbm(x * 0.006 + 3, z * 0.006 + 3, 4);
+    // 大尺度体量：有的山岭高耸、有的只是矮脊，避免峰顶一刀齐
+    const massif = fbm(x * 0.0044 + 11, z * 0.0044 + 11, 3);
+    let n = ridges * 0.55 + base * 0.45;
+    n = Math.max(0, (n - 0.22) / 0.78);
+    const peakScale = 14 + massif * 20; // 约 14~34，拉开高低差
+    let h = Math.pow(n, 1.32) * peakScale;
+    if (h > 8) h += (noise2(x * 0.11, z * 0.11) - 0.5) * 0.55;
     pos.setY(i, h);
     heightPixels[i] = Math.min(255, Math.round((h / HEIGHT_SCALE) * 255));
   }
@@ -216,25 +218,25 @@ const heightPixels = new Uint8Array((SEG + 1) * (SEG + 1));
 
   const nrm = terrainGeo.attributes.normal;
   const colors = new Float32Array(pos.count * 3);
-  const cLow = new THREE.Color(0x4a4860);
-  const cRock = new THREE.Color(0x8a8490); // 露出云面的岩体提亮，避免焦斑
-  const cGlow = new THREE.Color(0xf4d0bc); // 浅粉金 alpenglow
+  const cShade = new THREE.Color(0x5c6680); // 背光冷蓝灰，避免死黑
+  const cRock = new THREE.Color(0x9a948c);
+  const cLit = new THREE.Color(0xf8d4b8);  // 向阳粉金
   const c = new THREE.Color();
   const nVec = new THREE.Vector3();
   for (let i = 0; i < pos.count; i++) {
     const h = pos.getY(i);
-    if (h < 10.0) {
-      c.copy(cLow);
-    } else {
-      nVec.set(nrm.getX(i), nrm.getY(i), nrm.getZ(i));
-      const sunLit = THREE.MathUtils.clamp(nVec.dot(SUN_DIR), 0, 1);
-      const steep = 1 - nrm.getY(i);
-      const jitter = (hash(i, 13) - 0.5) * 1.6;
-      const exposed = THREE.MathUtils.smoothstep(h + jitter, 13.0, 18.0);
-      const glowK = exposed * (0.28 + 0.72 * sunLit) * (1 - steep * 0.4);
-      c.lerpColors(cRock, cGlow, THREE.MathUtils.clamp(glowK, 0, 1));
-      c.lerp(cLow, 1 - THREE.MathUtils.smoothstep(h, 11.0, 16.0));
-    }
+    nVec.set(nrm.getX(i), nrm.getY(i), nrm.getZ(i));
+    const ndl = nVec.dot(SUN_DIR);
+    const wrap = THREE.MathUtils.clamp(ndl * 0.55 + 0.45, 0, 1);
+    const sunK = Math.pow(Math.max(0, ndl), 0.55);
+    c.copy(cShade);
+    c.lerp(cRock, wrap);
+    c.lerp(cLit, sunK * 0.88);
+    // 峰顶向阳再叠一层 alpenglow；谷底略压暗但不拉成黑洞
+    const peak = THREE.MathUtils.smoothstep(h, 8.0, 22.0);
+    c.lerp(cLit, peak * sunK * 0.42);
+    const valley = 1 - THREE.MathUtils.smoothstep(h, 3.0, 10.0);
+    c.multiplyScalar(1 - valley * 0.22);
     colors[i * 3] = c.r;
     colors[i * 3 + 1] = c.g;
     colors[i * 3 + 2] = c.b;
@@ -249,10 +251,10 @@ heightMap.wrapT = THREE.ClampToEdgeWrapping;
 heightMap.needsUpdate = true;
 
 scene.add(new THREE.Mesh(terrainGeo, new THREE.MeshStandardMaterial({
-  vertexColors: true, flatShading: false, roughness: 0.78, metalness: 0.04,
+  vertexColors: true, flatShading: false, roughness: 0.62, metalness: 0.0,
 })));
 
-// ---------- 云海（加厚抬高；按地形高差渐隐，避免平面切山硬边） ----------
+// ---------- 云海（谷底成簇、山腰留洞；按地形高差渐隐） ----------
 const cloudVert = `
   varying vec3 vWorld;
   void main() {
@@ -269,6 +271,8 @@ const cloudFrag = `
   uniform float uSize;
   uniform float uLayerY;
   uniform float uHeightScale;
+  uniform float uCoverLo;
+  uniform float uCoverHi;
   varying vec3 vWorld;
 
   float hash(vec2 p) {
@@ -291,11 +295,12 @@ const cloudFrag = `
     return v;
   }
   void main() {
-    vec2 p = vWorld.xz * 0.010 + uDrift * uTime;
+    vec2 p = vWorld.xz * 0.011 + uDrift * uTime;
     float w = fbm(p * 1.6 + vec2(uTime * 0.01, 0.0));
     float n = fbm(p + w * 1.7);
-    // 低阈值：大片连绵云海，不是稀疏散斑
-    float a = smoothstep(0.16, 0.50, n);
+    // 大尺度云团掩膜：成片的海 + 成片的洞，不是均匀地毯
+    float banks = fbm(vWorld.xz * 0.0042 + uDrift * uTime * 0.25 + vec2(3.1, 7.7));
+    float a = smoothstep(uCoverLo, uCoverHi, n) * smoothstep(0.24, 0.50, banks);
     a *= 1.0 - smoothstep(280.0, 380.0, length(vWorld.xz));
 
     // 山体靠近本层时渐隐，避免平面切山的硬边/锯齿
@@ -313,11 +318,11 @@ const cloudFrag = `
   }`;
 
 const cloudMats = [];
+// 三层：谷底较浓、山腰成带、峰顶之上只留薄纱
 const CLOUD_LAYERS = [
-  { y: 12.0, drift: [0.006, 0.002], alpha: 0.98, size: 780 },
-  { y: 15.5, drift: [-0.004, 0.005], alpha: 0.90, size: 760 },
-  { y: 19.0, drift: [0.003, -0.006], alpha: 0.72, size: 740 },
-  { y: 22.5, drift: [-0.002, -0.003], alpha: 0.42, size: 720 },
+  { y: 8.5,  drift: [0.006, 0.002], alpha: 0.88, size: 780, cover: [0.26, 0.54] },
+  { y: 12.5, drift: [-0.004, 0.005], alpha: 0.58, size: 750, cover: [0.34, 0.62] },
+  { y: 16.5, drift: [0.003, -0.006], alpha: 0.28, size: 720, cover: [0.42, 0.68] },
 ];
 CLOUD_LAYERS.forEach((def, i) => {
   const mat = new THREE.ShaderMaterial({
@@ -332,6 +337,8 @@ CLOUD_LAYERS.forEach((def, i) => {
       uSize: { value: SIZE },
       uLayerY: { value: def.y },
       uHeightScale: { value: HEIGHT_SCALE },
+      uCoverLo: { value: def.cover[0] },
+      uCoverHi: { value: def.cover[1] },
     },
     transparent: true,
     depthWrite: false,
