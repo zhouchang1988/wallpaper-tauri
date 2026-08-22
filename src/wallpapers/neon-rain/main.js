@@ -1,0 +1,599 @@
+import * as THREE from 'three';
+import { Reflector } from 'three/addons/objects/Reflector.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+// ============ 基础 ============
+const FOG = 0x22436e; // 蓝调时刻：雾色贴近地平线天蓝
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(FOG, 0.006);
+
+// 天空穹顶：天顶深钴蓝 → 地平线亮靛蓝（上下渐变，不受雾影响）
+{
+  const c = document.createElement('canvas');
+  c.width = 4; c.height = 256;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, 256);
+  grad.addColorStop(0.0, '#0a1c3a');  // 天顶
+  grad.addColorStop(0.55, '#17335c');
+  grad.addColorStop(0.8, '#2a5080');  // 地平线
+  grad.addColorStop(1.0, '#16294a');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 4, 256);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sky = new THREE.Mesh(
+    new THREE.SphereGeometry(600, 24, 16),
+    new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide, fog: false })
+  );
+  scene.add(sky);
+}
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.22;
+document.getElementById('app').appendChild(renderer.domElement);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 900);
+
+// 蓝调时刻环境光：冷蓝天光为主，地面微蓝
+scene.add(new THREE.HemisphereLight(0x4a6ca8, 0x0c1420, 1.1));
+// 低角度定向光：一侧冷蓝余光，一侧极弱暖紫余晖
+{
+  const cool = new THREE.DirectionalLight(0x7a92c8, 0.7);
+  cool.position.set(-120, 90, 60);
+  scene.add(cool);
+  const dusk = new THREE.DirectionalLight(0x9a6a8a, 0.18);
+  dusk.position.set(140, 30, -80);
+  scene.add(dusk);
+}
+
+// 闪烁/呼吸灯统一登记
+const flickers = [];  // { mat, base, speed, phase, drop }
+const blinkers = [];  // 航空障碍灯 { mat, phase }
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = arr => arr[(Math.random() * arr.length) | 0];
+
+// ============ 窗光纹理（按楼体宽高格数绘制，杜绝拉伸） ============
+function makeWindowTexture(cols, rows, { lit = 0.32, warm = 0.6, base = '#101a2a' } = {}) {
+  const c = document.createElement('canvas');
+  c.width = cols * 32; c.height = rows * 32;
+  const g = c.getContext('2d');
+  g.fillStyle = base;
+  g.fillRect(0, 0, c.width, c.height);
+  const warmC = ['#ffd9a0', '#ffe9c8', '#ffc890'], coolC = ['#9fd8ff', '#b8c8ff', '#8fe0e8'];
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      if (Math.random() > lit) continue;
+      g.globalAlpha = rand(0.45, 1);
+      g.fillStyle = Math.random() < warm ? pick(warmC) : pick(coolC);
+      g.fillRect(x * 32 + 7, y * 32 + 9, 18, 14);
+    }
+  }
+  g.globalAlpha = 1;
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+function windowMaterial(cols, rows, opts, tintHSL) {
+  const tex = makeWindowTexture(cols, rows, opts);
+  const mat = new THREE.MeshStandardMaterial({
+    map: tex, emissive: 0xffffff, emissiveMap: tex,
+    emissiveIntensity: opts.emissive ?? 1.05,
+    roughness: 0.88, metalness: 0.1,
+  });
+  mat.color.setHSL(...tintHSL);
+  return mat;
+}
+
+// ============ 三段式楼体：裙房 + 塔身 + 顶部 ============
+const ROOF_TRIM = ['#3fd8ff', '#ffb050', '#ff4d88', '#8f7bff'];
+function makeBuilding(w, d, h) {
+  const g = new THREE.Group();
+  const tint = [rand(0.58, 0.66), rand(0.08, 0.16), rand(0.5, 0.72)];
+
+  // 裙房：暖色店面窗，更亮
+  const podiumH = 5;
+  const podium = new THREE.Mesh(
+    new THREE.BoxGeometry(w + 2.4, podiumH, d + 2.4),
+    windowMaterial(Math.max(3, Math.round(w / 2.6)), 2, { lit: 0.55, warm: 0.85, emissive: 0.9 }, tint)
+  );
+  podium.position.y = podiumH / 2;
+  g.add(podium);
+
+  // 塔身
+  const shaft = new THREE.Mesh(
+    new THREE.BoxGeometry(w, h, d),
+    windowMaterial(Math.max(3, Math.round(w / 3)), Math.max(3, Math.round(h / 3)), { lit: rand(0.3, 0.46) }, tint)
+  );
+  shaft.position.y = podiumH + h / 2;
+  g.add(shaft);
+
+  // 顶部：退台 + 檐口灯带
+  const topY = podiumH + h;
+  const crown = new THREE.Mesh(
+    new THREE.BoxGeometry(w * 0.55, 2.6, d * 0.55),
+    new THREE.MeshStandardMaterial({ color: 0x12151f, roughness: 0.9 })
+  );
+  crown.position.y = topY + 1.3;
+  g.add(crown);
+  // 檐口灯带压暗压低概率，避免满屏霓虹相框
+  if (Math.random() < 0.5) {
+    const trimColor = new THREE.Color(pick(ROOF_TRIM)).multiplyScalar(0.8);
+    const trim = new THREE.Mesh(
+      new THREE.BoxGeometry(w * 0.58, 0.16, d * 0.58),
+      new THREE.MeshBasicMaterial({ color: trimColor })
+    );
+    trim.position.y = topY + 0.1;
+    g.add(trim);
+  }
+
+  // 部分楼顶加天线 + 红色障碍灯
+  if (h > 26 && Math.random() < 0.6) {
+    const mast = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.08, 0.12, 6, 5),
+      new THREE.MeshStandardMaterial({ color: 0x1a1e2a, roughness: 0.8 })
+    );
+    mast.position.y = topY + 2.6 + 3;
+    g.add(mast);
+    const beaconMat = new THREE.MeshBasicMaterial({ color: 0xff2030 });
+    const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.32, 8, 8), beaconMat);
+    beacon.position.y = topY + 2.6 + 6.1;
+    g.add(beacon);
+    blinkers.push({ mat: beaconMat, phase: Math.random() * Math.PI * 2 });
+  }
+  return g;
+}
+
+// ============ 城市布局：十字街谷 + 中央广场 ============
+const AVE_HALF = 7;      // 街道半宽
+const PLAZA_R = 27;      // 广场半径
+const buildings = [];
+
+function placeAvenueRow(axis, sign, x0, x1) {
+  // 沿大道一侧排楼：front 排低矮，back 排高耸
+  let u = x0;
+  while (u < x1) {
+    const w = rand(10, 17), d = rand(10, 15);
+    if (Math.abs(u + w / 2) > PLAZA_R + 4) {
+      const hFront = rand(11, 26);
+      const b = makeBuilding(w, d, hFront);
+      const off = AVE_HALF + 1.2 + d / 2;
+      if (axis === 'x') b.position.set(u + w / 2, 0, sign * off);
+      else b.position.set(sign * off, 0, u + w / 2);
+      scene.add(b);
+      buildings.push({ g: b, w, d, h: hFront, axis, sign, front: true });
+      // 后排高塔（概率）
+      if (Math.random() < 0.62) {
+        const d2 = rand(11, 16), hBack = rand(28, 52);
+        const b2 = makeBuilding(rand(10, 16), d2, hBack);
+        const off2 = off + d / 2 + rand(3, 6) + d2 / 2;
+        if (axis === 'x') b2.position.set(u + w / 2 + rand(-2, 2), 0, sign * off2);
+        else b2.position.set(sign * off2, 0, u + w / 2 + rand(-2, 2));
+        scene.add(b2);
+        buildings.push({ g: b2, w, d: d2, h: hBack, axis, sign, front: false });
+      }
+    }
+    u += w + rand(2.5, 6);
+  }
+}
+
+for (const axis of ['x', 'z']) {
+  for (const sign of [-1, 1]) {
+    placeAvenueRow(axis, sign, -92, -8);
+    placeAvenueRow(axis, sign, 8, 92);
+  }
+}
+
+// 广场四周角楼（压低并外移，别挡住塔基与广场）
+for (const [cx, cz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+  const b = makeBuilding(rand(14, 18), rand(14, 18), rand(18, 30));
+  b.position.set(cx * (PLAZA_R + 16), 0, cz * (PLAZA_R + 16));
+  scene.add(b);
+}
+
+// ============ 中央分层塔（视觉主角） ============
+const NEON_CYAN = new THREE.Color('#33e0ff').multiplyScalar(1.35);
+const NEON_MAGENTA = new THREE.Color('#ff2d95').multiplyScalar(1.7);
+const NEON_AMBER = new THREE.Color('#ffb020').multiplyScalar(1.4);
+{
+  const tower = new THREE.Group();
+
+  const base = new THREE.Mesh(
+    new THREE.CylinderGeometry(11, 12.5, 5, 10),
+    windowMaterial(16, 2, { lit: 0.6, warm: 0.9, emissive: 1.0 }, [0.09, 0.3, 0.6])
+  );
+  base.position.y = 2.5;
+  tower.add(base);
+
+  const tier1 = new THREE.Mesh(
+    new THREE.CylinderGeometry(6.2, 7.4, 26, 10),
+    windowMaterial(14, 8, { lit: 0.4, warm: 0.5 }, [0.6, 0.14, 0.62])
+  );
+  tier1.position.y = 5 + 13;
+  tower.add(tier1);
+
+  const band1 = new THREE.Mesh(
+    new THREE.CylinderGeometry(7.0, 7.0, 1.1, 10),
+    new THREE.MeshBasicMaterial({ color: NEON_CYAN.clone() })
+  );
+  band1.position.y = 32;
+  tower.add(band1);
+  flickers.push({ mat: band1.material, base: NEON_CYAN.clone(), speed: 1.6, phase: 0, drop: 0 });
+
+  const tier2 = new THREE.Mesh(
+    new THREE.CylinderGeometry(4.1, 5.1, 17, 10),
+    windowMaterial(10, 6, { lit: 0.42, warm: 0.45 }, [0.6, 0.14, 0.58])
+  );
+  tier2.position.y = 33 + 8.5;
+  tower.add(tier2);
+
+  const band2 = new THREE.Mesh(
+    new THREE.CylinderGeometry(4.9, 4.9, 1.0, 10),
+    new THREE.MeshBasicMaterial({ color: NEON_MAGENTA.clone() })
+  );
+  band2.position.y = 51;
+  tower.add(band2);
+  flickers.push({ mat: band2.material, base: NEON_MAGENTA.clone(), speed: 2.3, phase: 1.7, drop: 0 });
+
+  const tier3 = new THREE.Mesh(
+    new THREE.CylinderGeometry(2.4, 3.3, 12, 10),
+    windowMaterial(7, 4, { lit: 0.45, warm: 0.5 }, [0.6, 0.14, 0.55])
+  );
+  tier3.position.y = 52 + 6;
+  tower.add(tier3);
+
+  const crownRing = new THREE.Mesh(
+    new THREE.CylinderGeometry(3.1, 3.1, 0.8, 10),
+    new THREE.MeshBasicMaterial({ color: NEON_AMBER.clone() })
+  );
+  crownRing.position.y = 64.5;
+  tower.add(crownRing);
+  flickers.push({ mat: crownRing.material, base: NEON_AMBER.clone(), speed: 1.1, phase: 3.1, drop: 0 });
+
+  const spire = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.12, 1.1, 15, 8),
+    new THREE.MeshStandardMaterial({ color: 0x1a1e2c, roughness: 0.7, metalness: 0.4 })
+  );
+  spire.position.y = 65 + 7.5;
+  tower.add(spire);
+
+  const beaconMat = new THREE.MeshBasicMaterial({ color: 0xff2030 });
+  const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.4, 10, 10), beaconMat);
+  beacon.position.y = 80.3;
+  tower.add(beacon);
+  blinkers.push({ mat: beaconMat, phase: 0 });
+
+  scene.add(tower);
+}
+
+// ============ 悬挂灯箱招牌（垂直挑出街面） ============
+const SIGN_COLORS = ['#ff2d78', '#00e5ff', '#ffae00', '#7c4dff', '#00ffa3', '#ff5c33'];
+// 竖向渐变拖影纹理（上亮下暗）
+const streakTex = (() => {
+  const c = document.createElement('canvas');
+  c.width = 16; c.height = 128;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, 128);
+  grad.addColorStop(0, 'rgba(255,255,255,0.9)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 16, 128);
+  return new THREE.CanvasTexture(c);
+})();
+{
+  const rodMat = new THREE.MeshStandardMaterial({ color: 0x141824, roughness: 0.8 });
+  for (const b of buildings) {
+    if (!b.front) continue;
+    const n = Math.random() < 0.55 ? 2 : 1;
+    for (let k = 0; k < n; k++) {
+      const color = new THREE.Color(pick(SIGN_COLORS));
+      const base = color.clone().multiplyScalar(2.1);
+      const hBox = rand(4.5, 7.5);
+      const mat = new THREE.MeshBasicMaterial({ color: base.clone() });
+      const signMesh = new THREE.Mesh(new THREE.BoxGeometry(0.45, hBox, 2.1), mat);
+
+      // 贴向大道一侧的立面，垂直挑出
+      const facadeOff = AVE_HALF + 1.2 - 0.9; // 招牌中心到街道侧
+      const lateral = rand(-b.w * 0.32, b.w * 0.32);
+      let sx, sz, rotY = 0;
+      if (b.axis === 'x') {
+        sx = b.g.position.x + lateral;
+        sz = b.sign * facadeOff;
+      } else {
+        sx = b.sign * facadeOff;
+        sz = b.g.position.z + lateral;
+        rotY = Math.PI / 2;
+      }
+      signMesh.position.set(sx, rand(5.5, 13), sz);
+      signMesh.rotation.y = rotY;
+      scene.add(signMesh);
+
+      // 悬挂杆
+      const rod = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 1.6), rodMat);
+      rod.position.set(sx, signMesh.position.y + hBox / 2 + 0.2, sz + (b.axis === 'x' ? b.sign * 0.9 : 0));
+      if (b.axis === 'z') { rod.rotation.y = Math.PI / 2; rod.position.x = sx + b.sign * 0.9; rod.position.z = sz; }
+      scene.add(rod);
+
+      // 路面湿光拖影：灯箱正下方的渐变贴片
+      const streak = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.8, hBox * 1.3),
+        new THREE.MeshBasicMaterial({
+          map: streakTex, color, transparent: true, opacity: 0.32,
+          blending: THREE.AdditiveBlending, depthWrite: false,
+        })
+      );
+      streak.rotation.x = -Math.PI / 2;
+      streak.rotation.z = Math.random() * Math.PI;
+      streak.position.set(sx, 0.06, sz);
+      scene.add(streak);
+
+      flickers.push({
+        mat, base, speed: rand(1, 4), phase: rand(0, 6.28),
+        drop: Math.random() < 0.3 ? 0.004 : 0, // 部分灯箱会偶发断电
+      });
+    }
+    // 裙房横向字带
+    if (Math.random() < 0.5) {
+      const color = new THREE.Color(pick(['#ffae00', '#ff2d78', '#00e5ff']));
+      const base = color.clone().multiplyScalar(1.7);
+      const mat = new THREE.MeshBasicMaterial({ color: base.clone() });
+      const band = new THREE.Mesh(new THREE.BoxGeometry(rand(4, 7), 0.9, 0.28), mat);
+      if (b.axis === 'x') {
+        band.position.set(b.g.position.x + rand(-2, 2), 4.6, b.sign * (AVE_HALF + 1.1));
+      } else {
+        band.position.set(b.sign * (AVE_HALF + 1.1), 4.6, b.g.position.z + rand(-2, 2));
+        band.rotation.y = Math.PI / 2;
+      }
+      scene.add(band);
+      flickers.push({ mat, base, speed: rand(0.8, 2), phase: rand(0, 6.28), drop: 0 });
+    }
+  }
+}
+
+// ============ 地面：镜面反射 + 沥青罩层 ============
+{
+  const mirror = new Reflector(new THREE.CircleGeometry(240, 48), {
+    textureWidth: Math.floor(1024 * Math.min(devicePixelRatio, 2)),
+    textureHeight: Math.floor(1024 * Math.min(devicePixelRatio, 2)),
+    color: 0x4a5058,
+    clipBias: 0.003,
+  });
+  mirror.rotation.x = -Math.PI / 2;
+  scene.add(mirror);
+
+  // 沥青罩层：压暗反射成「湿路面」而非镜子
+  const asphalt = new THREE.Mesh(
+    new THREE.CircleGeometry(240, 48),
+    new THREE.MeshStandardMaterial({
+      color: 0x0e1826, roughness: 0.92, metalness: 0.05,
+      transparent: true, opacity: 0.35,
+    })
+  );
+  asphalt.rotation.x = -Math.PI / 2;
+  asphalt.position.y = 0.02;
+  scene.add(asphalt);
+}
+
+// 地面光晕贴片（径向渐变）
+function glowDecal(x, z, radius, color, opacity) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(64, 64, 4, 64, 64, 64);
+  grad.addColorStop(0, 'rgba(255,255,255,1)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 128, 128);
+  const tex = new THREE.CanvasTexture(c);
+  const m = new THREE.Mesh(
+    new THREE.PlaneGeometry(radius * 2, radius * 2),
+    new THREE.MeshBasicMaterial({
+      map: tex, color, transparent: true, opacity,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    })
+  );
+  m.rotation.x = -Math.PI / 2;
+  m.position.set(x, 0.05, z);
+  scene.add(m);
+}
+
+// ============ 路灯：灯杆 + 暖光晕 + 少量真实点光 ============
+{
+  const poleMat = new THREE.MeshStandardMaterial({ color: 0x12151f, roughness: 0.85 });
+  const headMat = new THREE.MeshBasicMaterial({ color: new THREE.Color('#ffb36b').multiplyScalar(1.8) });
+  const lampSpots = [];
+  for (const axis of ['x', 'z']) {
+    for (let u = -88; u <= 88; u += 16) {
+      if (Math.abs(u) < PLAZA_R + 6) continue;
+      for (const s of [-1, 1]) lampSpots.push(axis === 'x' ? [u, s * 5.6] : [s * 5.6, u]);
+    }
+  }
+  // 广场边缘一圈
+  for (let k = 0; k < 8; k++) {
+    const a = (k / 8) * Math.PI * 2 + 0.39;
+    lampSpots.push([Math.cos(a) * (PLAZA_R - 3), Math.sin(a) * (PLAZA_R - 3)]);
+  }
+  let lightBudget = 8; // 真实 PointLight 限额，其余靠光晕贴片
+  for (const [x, z] of lampSpots) {
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 6.2, 5), poleMat);
+    pole.position.set(x, 3.1, z);
+    scene.add(pole);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 8, 8), headMat);
+    head.position.set(x, 6.3, z);
+    scene.add(head);
+    glowDecal(x, z, 8, 0xff9a50, 0.22);
+    if (lightBudget > 0 && Math.hypot(x, z) < 60) {
+      lightBudget--;
+      const pl = new THREE.PointLight(0xffa050, 55, 42, 2);
+      pl.position.set(x, 6.2, z);
+      scene.add(pl);
+    }
+  }
+  // 塔底暖光池，提亮地面层
+  glowDecal(0, 0, PLAZA_R + 8, 0xff9a50, 0.26);
+  const plazaLight = new THREE.PointLight(0xffb36b, 90, 70, 2);
+  plazaLight.position.set(0, 8, 0);
+  scene.add(plazaLight);
+  // 塔身冷色补光
+  const cool = new THREE.PointLight(0x3fd8ff, 28, 55, 2);
+  cool.position.set(0, 40, 0);
+  scene.add(cool);
+}
+
+// ============ 远景天际线剪影：蓝影贴在蓝天上 ============
+{
+  const mat = new THREE.MeshBasicMaterial({ color: 0x16263f });
+  const geo = new THREE.BoxGeometry(1, 1, 1);
+  for (let k = 0; k < 30; k++) {
+    const a = (k / 30) * Math.PI * 2 + rand(-0.1, 0.1);
+    const r = rand(170, 250);
+    const h = rand(40, 110);
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(Math.cos(a) * r, h / 2, Math.sin(a) * r);
+    m.scale.set(rand(14, 26), h, rand(14, 26));
+    m.rotation.y = rand(0, Math.PI);
+    scene.add(m);
+  }
+}
+
+// ============ 雨：带风斜落 ============
+const DROPS = 1700;
+let rainPos, rainGeo;
+{
+  rainPos = new Float32Array(DROPS * 2 * 3);
+  const heads = new Float32Array(DROPS * 3);
+  const reset = (k, top) => {
+    const a = Math.random() * Math.PI * 2;
+    const r = Math.sqrt(Math.random()) * 140;
+    heads[k * 3] = Math.cos(a) * r;
+    heads[k * 3 + 1] = top ? rand(85, 105) : rand(0, 105);
+    heads[k * 3 + 2] = Math.sin(a) * r;
+  };
+  for (let k = 0; k < DROPS; k++) reset(k, false);
+  rainGeo = new THREE.BufferGeometry();
+  rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
+  const rain = new THREE.LineSegments(rainGeo, new THREE.LineBasicMaterial({
+    color: 0x93a8cc, transparent: true, opacity: 0.30,
+  }));
+  rain.frustumCulled = false;
+  scene.add(rain);
+  rainGeo.userData = { heads, reset };
+}
+
+// ============ 车流：两条大道、双向四车道 ============
+const CARS_PER_LANE = 42;
+let carPos, carGeo;
+const carLanes = [ // { axis, laneOff, dir, color }
+  { axis: 'x', off: -3.2, dir: 1, color: new THREE.Color(0xffeecf) },
+  { axis: 'x', off: 3.2, dir: -1, color: new THREE.Color(0xff3548) },
+  { axis: 'z', off: -3.2, dir: -1, color: new THREE.Color(0xff3548) },
+  { axis: 'z', off: 3.2, dir: 1, color: new THREE.Color(0xffeecf) },
+];
+{
+  const total = CARS_PER_LANE * carLanes.length;
+  carPos = new Float32Array(total * 3);
+  const colors = new Float32Array(total * 3);
+  let k = 0;
+  for (const lane of carLanes) {
+    for (let i = 0; i < CARS_PER_LANE; i++, k++) {
+      const u = rand(-120, 120);
+      carPos[k * 3] = lane.axis === 'x' ? u : lane.off;
+      carPos[k * 3 + 1] = 1.1;
+      carPos[k * 3 + 2] = lane.axis === 'x' ? lane.off : u;
+      colors[k * 3] = lane.color.r; colors[k * 3 + 1] = lane.color.g; colors[k * 3 + 2] = lane.color.b;
+    }
+  }
+  carGeo = new THREE.BufferGeometry();
+  carGeo.setAttribute('position', new THREE.BufferAttribute(carPos, 3));
+  carGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  const cars = new THREE.Points(carGeo, new THREE.PointsMaterial({
+    size: 1.9, vertexColors: true, transparent: true, opacity: 0.85,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  }));
+  cars.frustumCulled = false;
+  scene.add(cars);
+}
+
+// ============ 后期泛光 ============
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.58, 0.45, 0.62));
+composer.addPass(new OutputPass());
+
+// ============ 相机：45° 俯角匀速巡航（高度 = 半径） ============
+const R = 92;
+let angle = 0.7;
+
+const clock = new THREE.Clock();
+function tick() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+
+  angle += dt * 0.05;
+  camera.position.set(Math.cos(angle) * R, R, Math.sin(angle) * R);
+  camera.lookAt(0, 22, 0);
+
+  // 风雨：风向随时间缓变
+  const windX = 0.20 + 0.22 * Math.sin(t * 0.33);
+  const windZ = 0.08 + 0.07 * Math.sin(t * 0.21);
+  const dir = new THREE.Vector3(windX, -1, windZ).normalize();
+  const step = 52 * dt;
+  const { heads, reset } = rainGeo.userData;
+  for (let k = 0; k < DROPS; k++) {
+    heads[k * 3] += dir.x * step;
+    heads[k * 3 + 1] += dir.y * step;
+    heads[k * 3 + 2] += dir.z * step;
+    if (heads[k * 3 + 1] < 0) reset(k, true);
+    rainPos[k * 6] = heads[k * 3];
+    rainPos[k * 6 + 1] = heads[k * 3 + 1];
+    rainPos[k * 6 + 2] = heads[k * 3 + 2];
+    rainPos[k * 6 + 3] = heads[k * 3] - dir.x * 1.7;
+    rainPos[k * 6 + 4] = heads[k * 3 + 1] - dir.y * 1.7;
+    rainPos[k * 6 + 5] = heads[k * 3 + 2] - dir.z * 1.7;
+  }
+  rainGeo.attributes.position.needsUpdate = true;
+
+  // 车流
+  const v = 15 * dt;
+  let k = 0;
+  for (const lane of carLanes) {
+    for (let i = 0; i < CARS_PER_LANE; i++, k++) {
+      const idx = lane.axis === 'x' ? k * 3 : k * 3 + 2;
+      carPos[idx] += lane.dir * v;
+      if (carPos[idx] > 120) carPos[idx] = -120;
+      if (carPos[idx] < -120) carPos[idx] = 120;
+    }
+  }
+  carGeo.attributes.position.needsUpdate = true;
+
+  // 霓虹闪烁
+  for (const s of flickers) {
+    let f = 0.8 + 0.2 * Math.sin(t * s.speed + s.phase);
+    if (s.drop && Math.random() < s.drop) f *= 0.25;
+    s.mat.color.copy(s.base).multiplyScalar(f);
+  }
+  // 障碍灯：慢闪
+  for (const b of blinkers) {
+    const on = Math.sin(t * 2.2 + b.phase) > 0.2;
+    b.mat.color.setHex(on ? 0xff2030 : 0x3a0a0e);
+  }
+
+  composer.render();
+  requestAnimationFrame(tick);
+}
+tick();
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+});

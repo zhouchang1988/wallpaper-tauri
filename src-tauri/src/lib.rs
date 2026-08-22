@@ -13,7 +13,7 @@ const WALLPAPERS: &[(&str, &str)] = &[
     ("storm-ship", "风暴航船"),
     ("pipes", "三维水管"),
     ("dolphins", "海豚群"),
-    ("cloud-sea", "云海日出"),
+    ("neon-rain", "雨夜霓虹"),
 ];
 
 /// 默认壁纸（注册表第一项）
